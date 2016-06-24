@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text;
 using System.IO;
 using System.Diagnostics;
-using System.Xml.Serialization;
+using Newtonsoft.Json;
 using CommandLine;
 
 namespace huffman
@@ -67,13 +67,13 @@ namespace huffman
             node.leftChild = min1; node.rightChild = min2;
             nodeList.Add(node);
         }
-        public void generate(bool decode, string source)
+        public void generate(bool decode, string source, string destination)
         {
             Dictionary<char, Int64> charList;
-            // Zum Dekodieren wird die Zeichenfrequenz aus der XML-Datei ausgelesen
+            // Zum Dekodieren wird die Zeichenfrequenz aus der JSON-Datei ausgelesen
             if (decode)
             {
-                charList = this.readXML();
+                charList = this.readJSON(source);
             }
             // Zum Enkodieren wird die Zeichenfrequenz berechnet und gespeichert
             else
@@ -91,7 +91,7 @@ namespace huffman
                 sr.Close();
 
                 // Speichern
-                this.writeXML(charList);
+                this.writeJSON(charList, destination);
             }
             // Grundgerüst des Binärbaums generieren
             foreach (KeyValuePair<char, Int64> pair in charList)
@@ -192,8 +192,8 @@ namespace huffman
             // Schreibe Binärdatei
             FileStream bw = new FileStream(destination, FileMode.Create, FileAccess.Write);
 
-            int limit = ((int)result.Length / 8) * 8 + 8; // z.B. int(262/8) = 32, 32*8 = 256; +8 für inkomplettes Byte
-            int overflow = result.Length % 8;
+            int limit = ((int)result.Length / 8) * 8; // z.B. int(262/8) = 32, 32*8 = 256; 
+            if (result.Length % 8) limit += 8;        // +8 für inkomplettes Byte
 
             bool[] extractBits = new bool[limit];
             // Konvertiere von String -> Bool
@@ -225,25 +225,30 @@ namespace huffman
 
             return new BitArray(readBytes);
         }
-        private void writeXML(Dictionary<char, Int64> charList)
+        private void writeJSON(Dictionary<char, Int64> charList, string filename)
         {
-            // https://stackoverflow.com/questions/12554186
-            StreamWriter sw = new StreamWriter("char_freq");
-            XmlSerializer serializer = new XmlSerializer(typeof(HuffItemXML[]),
-                 new XmlRootAttribute() { ElementName = "items" });
-            serializer.Serialize(sw,
-                charList.Select(kv => new HuffItemXML() { id = kv.Key, value = kv.Value.ToString() }).ToArray());
+
+            StreamWriter sw = new StreamWriter(filename + ".frequency.json");
+            string json = JsonConvert.SerializeObject(charList, Formatting.Indented);
+            sw.Write (json);
             sw.Close();
         }
-        private Dictionary<char, Int64> readXML()
-        {
-            StreamReader sr = new StreamReader("char_freq");
-            XmlSerializer serializer = new XmlSerializer(typeof(HuffItemXML[]),
-                 new XmlRootAttribute() { ElementName = "items" });
-            Dictionary<char, Int64> charList = ((HuffItemXML [])serializer.Deserialize(sr))
-               .ToDictionary(i => (char)i.id, i => Int64.Parse(i.value));
-            sr.Close();
+        private Dictionary<char, Int64> readJSON(string filename)
+        {   
+            filename = filename + ".frequency.json";
+            Dictionary<char, Int64> charList = new Dictionary<char, Int64>();
+
+            try {
+                StreamReader sr = new StreamReader(filename);   
+                charList = JsonConvert.DeserializeObject<Dictionary<char, Int64>>(sr.ReadToEnd());      
+                sr.Close();
+            } catch (System.IO.FileNotFoundException) {
+                Console.WriteLine("Datei nicht gefunden: " + filename);
+                System.Environment.Exit(0);
+            }
+
             return charList;
+
         }
     }
     class BNode
@@ -260,13 +265,6 @@ namespace huffman
             if (this.parent != null) return true;
             else return false;
         }
-    }
-    public class HuffItemXML
-    {
-        [XmlAttribute]
-        public int id;
-        [XmlAttribute]
-        public string value;
     }
     class Program
     {
@@ -304,7 +302,7 @@ namespace huffman
             if (!options.decode)
             {
                 // erzeugt Huffman-Baum
-                t.generate(options.decode, source);
+                t.generate(options.decode, source, destination);
 
                 // erzeuge Huffman-Tabelle (Zeichen -> Binärzeichenkette), Huffman-Baum wird durchlaufen
                 t.huffmanEncode(options.Verbose);
@@ -314,8 +312,8 @@ namespace huffman
             }
             else
             {
-                // erzeugt Huffman-Baum, charList wird aus XML-Datei ausgelesen
-                t.generate(options.decode, null);
+                // erzeugt Huffman-Baum, charList wird aus JSON-Datei ausgelesen
+                t.generate(options.decode, source, destination);
 
                 // Binärdatei auslesen
                 BitArray bArray = t.readBinaryFile(source);
@@ -330,10 +328,14 @@ namespace huffman
             {
                 long fls = (new FileInfo(source)).Length;
                 long fld = (new FileInfo(destination)).Length;
+                long fldfr = (new FileInfo(destination+".frequency.json")).Length;
                 Console.WriteLine("Dateigröße der Quelldatei: " + fls);
                 Console.WriteLine("Dateigröße der Zieldatei: " + fld);
-                Console.WriteLine("Kompressionsrate: " + Math.Round(
-                    (Decimal)((float)fld / (float)fls * 100), 2, MidpointRounding.AwayFromZero) + "%");
+                Console.WriteLine("Dateigröße der Zeichenfrequenztabelle: " + fldfr);
+                Console.WriteLine("Platzersparnis: " + Math.Round(
+                    (1-(Decimal)(((float)fld + (float)fldfr)/ (float)fls)) * 100, 
+                    2, 
+                    MidpointRounding.AwayFromZero) + "%");
                 Console.WriteLine("Benötigte Zeit: " + timePerParse.ElapsedMilliseconds + "ms");
             }
         }
